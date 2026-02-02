@@ -60,6 +60,7 @@ class Dispatcher {
 			CLMemory<mp_number> m_memInversedNegativeDoubleGy;
 			CLMemory<mp_number> m_memPrevLambda;
 			CLMemory<result> m_memResult;
+			std::vector<cl_uint> m_lastFound;
 
 			// Data parameters used in some modes
 			CLMemory<cl_uchar> m_memData1;

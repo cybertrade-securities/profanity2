@@ -17,7 +17,8 @@ usage: ./profanity2 [OPTIONS]
     --numbers               Score on numbers anywhere in hash.
     --mirror                Score on mirroring from center.
     --leading-doubles       Score on hashes leading with hexadecimal pairs
-    -b, --zero-bytes        Score on hashes containing the most zero bytes
+    -b, --zero-bytes [N]    Score on hashes containing the most zero bytes.
+          Optional N is equivalent to --min-score N.
 
   Modes with arguments:
     --leading <single hex>  Score on hashes leading with given hex character.
@@ -38,6 +39,8 @@ usage: ./profanity2 [OPTIONS]
   Device control:
     -s, --skip <index>      Skip device given by index.
     -n, --no-cache          Don't load cached pre-compiled version of kernel.
+    -S, --min-score <score> Print scores below once; equal/above continuously.
+    -p, --save [path]        Save results to file (default: results.txt).
 
   Tweaking:
     -w, --work <size>       Set OpenCL local work size. [default = 64]
@@ -55,6 +58,9 @@ usage: ./profanity2 [OPTIONS]
     ./profanity2 --leading-range -m 10 -M 12 -z HEX_PUBLIC_KEY_128_CHARS_LONG
     ./profanity2 --range -m 0 -M 1 -z HEX_PUBLIC_KEY_128_CHARS_LONG
     ./profanity2 --contract --leading 0 -z HEX_PUBLIC_KEY_128_CHARS_LONG
+    ./profanity2 --zero-bytes 7 -z HEX_PUBLIC_KEY_128_CHARS_LONG
+    ./profanity2 --min-score 7 --leading f -z HEX_PUBLIC_KEY_128_CHARS_LONG
+    ./profanity2 --save results.txt --leading f -z HEX_PUBLIC_KEY_128_CHARS_LONG
 
   About:
     profanity2 is a vanity address generator for Ethereum that utilizes

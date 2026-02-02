@@ -98,10 +98,19 @@ static void printResult(cl_ulong4 seed, cl_ulong round, result r, cl_uchar score
 
 	// Print
 	const std::string strVT100ClearLine = "\33[2K\r";
-	std::cout << strVT100ClearLine << "  Time: " << std::setw(5) << seconds << "s Score: " << std::setw(2) << (int) score << " Private: 0x" << strPrivate << ' ';
+	std::ostringstream line;
+	line << "  Time: " << std::setw(5) << seconds << "s Score: " << std::setw(2) << (int) score << " Private: 0x" << strPrivate << ' ';
+	line << mode.transformName();
+	line << ": 0x" << strPublic;
 
-	std::cout << mode.transformName();
-	std::cout << ": 0x" << strPublic << std::endl;
+	std::cout << strVT100ClearLine << line.str() << std::endl;
+
+	if (mode.saveResults && !mode.savePath.empty()) {
+		std::ofstream out(mode.savePath, std::ios::app);
+		if (out.is_open()) {
+			out << line.str() << std::endl;
+		}
+	}
 }
 
 unsigned int getKernelExecutionTimeMicros(cl_event & e) {
@@ -174,7 +183,7 @@ Dispatcher::Device::Device(Dispatcher & parent, cl_context & clContext, cl_progr
 	m_index(index),
 	m_clDeviceId(clDeviceId),
 	m_worksizeLocal(worksizeLocal),
-	m_clScoreMax(0),
+	m_clScoreMax(mode.score),
 	m_clQueue(createQueue(clContext, clDeviceId) ),
 	m_kernelInit( createKernel(clProgram, "profanity_init") ),
 	m_kernelInverse(createKernel(clProgram, "profanity_inverse")),
@@ -185,7 +194,8 @@ Dispatcher::Device::Device(Dispatcher & parent, cl_context & clContext, cl_progr
 	m_memPointsDeltaX(clContext, m_clQueue, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, size, true),
 	m_memInversedNegativeDoubleGy(clContext, m_clQueue, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, size, true),
 	m_memPrevLambda(clContext, m_clQueue, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, size, true),
-	m_memResult(clContext, m_clQueue, CL_MEM_READ_WRITE | CL_MEM_HOST_READ_ONLY, PROFANITY_MAX_SCORE + 1),
+	m_memResult(clContext, m_clQueue, CL_MEM_READ_WRITE, PROFANITY_MAX_SCORE + 1),
+	m_lastFound(PROFANITY_MAX_SCORE + 1, 0),
 	m_memData1(clContext, m_clQueue, CL_MEM_READ_ONLY | CL_MEM_HOST_WRITE_ONLY, 20),
 	m_memData2(clContext, m_clQueue, CL_MEM_READ_ONLY | CL_MEM_HOST_WRITE_ONLY, 20),
 	m_clSeed(createSeed()),
@@ -436,6 +446,43 @@ void Dispatcher::dispatch(Device & d) {
 }
 
 void Dispatcher::handleResult(Device & d) {
+	auto printWithMin = [&](const cl_uchar minScore) -> bool {
+		if (minScore == 0) {
+			return false;
+		}
+
+		for (int i = PROFANITY_MAX_SCORE; i >= 0; --i) {
+			result & r = d.m_memResult[i];
+			if (i >= minScore) {
+				if (r.found > d.m_lastFound[i]) {
+					std::lock_guard<std::mutex> lock(m_mutex);
+					printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
+					d.m_lastFound[i] = r.found;
+					if (m_clScoreQuit && i >= m_clScoreQuit) {
+						m_quit = true;
+					}
+				}
+			} else if (r.found > 0 && d.m_lastFound[i] == 0) {
+				std::lock_guard<std::mutex> lock(m_mutex);
+				printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
+				d.m_lastFound[i] = 1;
+				if (m_clScoreQuit && i >= m_clScoreQuit) {
+					m_quit = true;
+				}
+			}
+		}
+
+		return true;
+	};
+
+	if (printWithMin(m_mode.printScoreMin)) {
+		return;
+	}
+
+	if (printWithMin(m_mode.scoreMin)) {
+		return;
+	}
+
 	for (auto i = PROFANITY_MAX_SCORE; i > m_clScoreMax; --i) {
 		result & r = d.m_memResult[i];
 

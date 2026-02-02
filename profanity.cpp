@@ -157,6 +157,10 @@ int main(int argc, char * * argv) {
 		std::string strModeLeading;
 		std::string strModeMatching;
 		std::string strPublicKey;
+		int zeroBytesMin = -1;
+		int minScorePrint = -1;
+		bool bSaveResults = false;
+		std::string savePath = "results.txt";
 		bool bModeLeadingRange = false;
 		bool bModeRange = false;
 		bool bModeMirror = false;
@@ -192,7 +196,9 @@ int main(int argc, char * * argv) {
 		argp.addSwitch('I', "inverse-multiple", inverseMultiple);
 		argp.addSwitch('c', "contract", bMineContract);
 		argp.addSwitch('z', "publicKey", strPublicKey);
-		argp.addSwitch('b', "zero-bytes", bModeZeroBytes);
+		argp.addOptionalSwitch('b', "zero-bytes", bModeZeroBytes, zeroBytesMin);
+		argp.addSwitch('S', "min-score", minScorePrint);
+		argp.addOptionalSwitch('p', "save", bSaveResults, savePath);
 
 		if (!argp.parse()) {
 			std::cout << "error: bad arguments, try again :<" << std::endl;
@@ -226,10 +232,29 @@ int main(int argc, char * * argv) {
 		} else if (bModeDoubles) {
 			mode = Mode::doubles();
 		} else if (bModeZeroBytes) {
+			if (zeroBytesMin > 20) {
+				std::cout << "error: zero-bytes value must be between 0 and 20" << std::endl;
+				return 1;
+			}
 			mode = Mode::zeroBytes();
 		} else {
 			std::cout << g_strHelp << std::endl;
 			return 0;
+		}
+
+		if (minScorePrint >= 0) {
+			if (minScorePrint > PROFANITY_MAX_SCORE) {
+				std::cout << "error: min-score must be between 0 and " << PROFANITY_MAX_SCORE << std::endl;
+				return 1;
+			}
+			mode.printScoreMin = static_cast<cl_uchar>(minScorePrint);
+		} else if (bModeZeroBytes && zeroBytesMin >= 0) {
+			mode.printScoreMin = static_cast<cl_uchar>(zeroBytesMin);
+		}
+
+		if (bSaveResults) {
+			mode.saveResults = true;
+			mode.savePath = savePath;
 		}
 		
 		if (strPublicKey.length() == 0) {

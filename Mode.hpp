@@ -28,7 +28,7 @@ class Mode {
 
 		static Mode benchmark();
 		static Mode zeros();
-		static Mode zeroBytes();
+		static Mode zeroBytes(const cl_uchar minScore = 0);
 		static Mode letters();
 		static Mode numbers();
 		static Mode doubles();
@@ -46,6 +46,10 @@ class Mode {
 		cl_uchar data1[20];
 		cl_uchar data2[20];
 		cl_uchar score;
+		cl_uchar scoreMin;
+		cl_uchar printScoreMin;
+		bool saveResults;
+		std::string savePath;
 };
 
 #endif /* HPP_MODE */

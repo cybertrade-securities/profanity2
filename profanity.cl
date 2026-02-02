@@ -678,15 +678,12 @@ __kernel void profanity_iterate(__global mp_number * const pDeltaX, __global mp_
 
 void profanity_result_update(const size_t id, __global const uchar * const hash, __global result * const pResult, const uchar score, const uchar scoreMax) {
 	if (score && score > scoreMax) {
-		uchar hasResult = atomic_inc(&pResult[score].found); // NOTE: If "too many" results are found it'll wrap around to 0 again and overwrite last result. Only relevant if global worksize exceeds MAX(uint).
+		atomic_inc(&pResult[score].found); // NOTE: If "too many" results are found it'll wrap around to 0 again and overwrite last result. Only relevant if global worksize exceeds MAX(uint).
 
-		// Save only one result for each score, the first.
-		if (hasResult == 0) {
-			pResult[score].foundId = id;
+		pResult[score].foundId = id;
 
-			for (int i = 0; i < 20; ++i) {
-				pResult[score].foundHash[i] = hash[i];
-			}
+		for (int i = 0; i < 20; ++i) {
+			pResult[score].foundHash[i] = hash[i];
 		}
 	}
 }

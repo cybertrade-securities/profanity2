@@ -1,7 +1,7 @@
 #include "Mode.hpp"
 #include <stdexcept>
 
-Mode::Mode() : score(0) {
+Mode::Mode() : score(0), scoreMin(0), printScoreMin(0), saveResults(false), savePath("") {
 
 }
 
@@ -84,10 +84,14 @@ Mode Mode::range(const cl_uchar min, const cl_uchar max) {
 	return r;
 }
 
-Mode Mode::zeroBytes() {
+Mode Mode::zeroBytes(const cl_uchar minScore) {
 	Mode r;
 	r.name = "zeroBytes";
 	r.kernel = "profanity_score_zerobytes";
+	r.scoreMin = minScore;
+	if (minScore > 0) {
+		r.score = minScore - 1;
+	}
 	return r;
 }
 
