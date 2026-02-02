@@ -41,6 +41,35 @@ $ python3
 >>> hex((PRIVATE_KEY_A + PRIVATE_KEY_B) % 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F)
 ```
 
+# Build (Windows)
+
+## Requirements
+
+- MSYS2 (MINGW64 shell)
+- GPU driver with OpenCL support (NVIDIA/AMD/Intel)
+
+## Install toolchain and OpenCL headers
+
+Open MINGW64 shell and run:
+```bash
+pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-opencl-headers mingw-w64-x86_64-opencl-icd
+```
+
+## Build
+
+```bash
+make clean
+make
+```
+
+The executable will be `profanity2.x64` in the project root.
+
+## Notes
+
+- OpenCL runtime is provided by your GPU driver; it must be installed on the target machine.
+- If you run the exe outside MSYS2, ensure required DLLs are available in PATH.
+- To avoid PATH issues, you can ship required MSYS2 DLLs next to the exe (at minimum `libwinpthread-1.dll` from `C:\msys64\mingw64\bin`).
+
 # Usage
 ```
 usage: ./profanity2 [OPTIONS]

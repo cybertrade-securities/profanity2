@@ -10,7 +10,9 @@
 #include <thread>
 #include <algorithm>
 
-#if defined(__APPLE__) || defined(__MACOSX)
+#if defined(_WIN32)
+#include <winsock2.h>
+#elif defined(__APPLE__) || defined(__MACOSX)
 #include <machine/endian.h>
 #else
 #include <arpa/inet.h>
