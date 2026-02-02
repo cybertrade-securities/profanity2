@@ -5,9 +5,13 @@ OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=profanity2
 
 UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Darwin)
 	LDFLAGS=-framework OpenCL
-	CFLAGS=-c -std=c++11 -Wall -mmmx -O2
+	CFLAGS=-c -std=c++11 -Wall -O2
+	ifeq ($(UNAME_M),x86_64)
+		CFLAGS += -mmmx
+	endif
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
 	EXECUTABLE=profanity2.exe
 	LDFLAGS=-s -lOpenCL -lws2_32 -mcmodel=large -static-libgcc -static-libstdc++
