@@ -55,14 +55,14 @@ Open MINGW64 shell and run:
 pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-opencl-headers mingw-w64-x86_64-opencl-icd
 ```
 
-## Build
+## Build in MINGW64 shell
 
 ```bash
 make clean
 make
 ```
 
-The executable will be `profanity2.x64` in the project root.
+The executable will be `profanity2.exe` in the project root.
 
 ## Notes
 
