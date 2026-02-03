@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
+#include <deque>
+#include <thread>
+#include <atomic>
 
 #if defined(__APPLE__) || defined(__MACOSX)
 #include <OpenCL/cl.h>
@@ -53,6 +57,7 @@ class Dispatcher {
 			cl_kernel m_kernelInverse;
 			cl_kernel m_kernelIterate;
 			cl_kernel m_kernelTransform;
+			cl_kernel m_kernelClearResults;
 			cl_kernel m_kernelScore;
 
 			CLMemory<point> m_memPrecomp;
@@ -61,6 +66,7 @@ class Dispatcher {
 			CLMemory<mp_number> m_memPrevLambda;
 			CLMemory<result> m_memResult;
 			std::vector<cl_uint> m_lastFound;
+			std::vector<unsigned char> m_belowPrinted;
 
 			// Data parameters used in some modes
 			CLMemory<cl_uchar> m_memData1;
@@ -80,12 +86,21 @@ class Dispatcher {
 			cl_event m_eventFinished;
 		};
 
+		struct ResultTask {
+			Device * device;
+			cl_ulong4 seed;
+			cl_ulong round;
+			std::vector<result> results;
+		};
+
 	public:
 		Dispatcher(cl_context & clContext, cl_program & clProgram, const Mode mode, const size_t worksizeMax, const size_t inverseSize, const size_t inverseMultiple, const cl_uchar clScoreQuit, const std::string & seedPublicKey);
 		~Dispatcher();
 
 		void addDevice(cl_device_id clDeviceId, const size_t worksizeLocal, const size_t index);
 		void run();
+		static void requestInterrupt();
+		static bool interruptRequested();
 
 	private:
 		void init();
@@ -100,6 +115,9 @@ class Dispatcher {
 		void randomizeSeed(Device & d);
 
 		void onEvent(cl_event event, cl_int status, Device & d);
+		void enqueueResult(Device & d);
+		void resultThreadLoop();
+		bool shouldPrintNow();
 
 		void printSpeed();
 
@@ -119,17 +137,25 @@ class Dispatcher {
 		cl_uchar m_clScoreQuit;
 
 		std::vector<Device *> m_vDevices;
+		std::thread m_resultThread;
+		std::mutex m_resultMutex;
+		std::condition_variable m_resultCv;
+		std::deque<ResultTask> m_resultQueue;
+		bool m_resultStop;
+		std::atomic<long long> m_lastPrintMs;
+		std::atomic<long long> m_lastSpeedPrintMs;
 
 		cl_event m_eventFinished;
 
 		// Run information
 		std::mutex m_mutex;
+		std::mutex m_outputMutex;
 		std::chrono::time_point<std::chrono::steady_clock> timeStart;
 		unsigned int m_countPrint;
 		unsigned int m_countRunning;
 		size_t m_sizeInitTotal;
 		size_t m_sizeInitDone;
-		bool m_quit;
+		std::atomic<bool> m_quit;
 		cl_ulong4 m_publicKeyX;
 		cl_ulong4 m_publicKeyY;
 };

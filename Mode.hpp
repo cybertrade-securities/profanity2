@@ -50,6 +50,7 @@ class Mode {
 		cl_uchar printScoreMin;
 		bool saveResults;
 		std::string savePath;
+		int printIntervalMs;
 };
 
 #endif /* HPP_MODE */

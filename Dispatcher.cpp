@@ -24,6 +24,8 @@
 #define htonll(x) ((((uint64_t)htonl(x)) << 32) | htonl((x) >> 32))
 #endif
 
+static std::atomic<bool> g_interruptRequested(false);
+
 static std::string::size_type fromHex(char c) {
 	if (c >= 'A' && c <= 'F') {
 		c += 'a' - 'A';
@@ -189,6 +191,7 @@ Dispatcher::Device::Device(Dispatcher & parent, cl_context & clContext, cl_progr
 	m_kernelInverse(createKernel(clProgram, "profanity_inverse")),
 	m_kernelIterate(createKernel(clProgram, "profanity_iterate")),
 	m_kernelTransform( mode.transformKernel() == "" ? NULL : createKernel(clProgram, mode.transformKernel())),
+	m_kernelClearResults(createKernel(clProgram, "profanity_clear_results")),
 	m_kernelScore(createKernel(clProgram, mode.kernel)),
 	m_memPrecomp(clContext, m_clQueue, CL_MEM_READ_ONLY | CL_MEM_HOST_WRITE_ONLY, sizeof(g_precomp), g_precomp),
 	m_memPointsDeltaX(clContext, m_clQueue, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, size, true),
@@ -196,6 +199,7 @@ Dispatcher::Device::Device(Dispatcher & parent, cl_context & clContext, cl_progr
 	m_memPrevLambda(clContext, m_clQueue, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, size, true),
 	m_memResult(clContext, m_clQueue, CL_MEM_READ_WRITE, PROFANITY_MAX_SCORE + 1),
 	m_lastFound(PROFANITY_MAX_SCORE + 1, 0),
+	m_belowPrinted(PROFANITY_MAX_SCORE + 1, 0),
 	m_memData1(clContext, m_clQueue, CL_MEM_READ_ONLY | CL_MEM_HOST_WRITE_ONLY, 20),
 	m_memData2(clContext, m_clQueue, CL_MEM_READ_ONLY | CL_MEM_HOST_WRITE_ONLY, 20),
 	m_clSeed(createSeed()),
@@ -227,10 +231,21 @@ Dispatcher::Dispatcher(cl_context & clContext, cl_program & clProgram, const Mod
 	, m_publicKeyX(fromHex(seedPublicKey.substr(0, 64)))
 	, m_publicKeyY(fromHex(seedPublicKey.substr(64, 64)))
 {
+	m_resultStop = false;
+	m_lastPrintMs = 0;
+	m_lastSpeedPrintMs = 0;
 }
 
 Dispatcher::~Dispatcher() {
 
+}
+
+void Dispatcher::requestInterrupt() {
+	g_interruptRequested.store(true, std::memory_order_relaxed);
+}
+
+bool Dispatcher::interruptRequested() {
+	return g_interruptRequested.load(std::memory_order_relaxed);
 }
 
 void Dispatcher::addDevice(cl_device_id clDeviceId, const size_t worksizeLocal, const size_t index) {
@@ -241,6 +256,10 @@ void Dispatcher::addDevice(cl_device_id clDeviceId, const size_t worksizeLocal, 
 void Dispatcher::run() {
 	m_eventFinished = clCreateUserEvent(m_clContext, NULL);
 	timeStart = std::chrono::steady_clock::now();
+	if (m_mode.printScoreMin > 0 || m_mode.scoreMin > 0) {
+		m_resultStop = false;
+		m_resultThread = std::thread(&Dispatcher::resultThreadLoop, this);
+	}
 
 	init();
 
@@ -264,6 +283,15 @@ void Dispatcher::run() {
 	clWaitForEvents(1, &m_eventFinished);
 	clReleaseEvent(m_eventFinished);
 	m_eventFinished = NULL;
+
+	if (m_resultThread.joinable()) {
+		{
+			std::lock_guard<std::mutex> lock(m_resultMutex);
+			m_resultStop = true;
+		}
+		m_resultCv.notify_one();
+		m_resultThread.join();
+	}
 }
 
 void Dispatcher::init() {
@@ -340,6 +368,9 @@ void Dispatcher::initBegin(Device & d) {
 	d.m_memData2.setKernelArg(d.m_kernelScore, 3);
 
 	CLMemory<cl_uchar>::setKernelArg(d.m_kernelScore, 4, d.m_clScoreMax); // Updated in handleResult()
+
+	// Kernel arguments - profanity_clear_results
+	d.m_memResult.setKernelArg(d.m_kernelClearResults, 0);
 
 	// Seed device
 	initContinue(d);
@@ -430,6 +461,12 @@ void Dispatcher::dispatch(Device & d) {
 		enqueueKernelDevice(d, d.m_kernelTransform, m_size);
 	}
 
+	// Clear results for this round before scoring
+	enqueueKernel(d.m_clQueue, d.m_kernelClearResults, PROFANITY_MAX_SCORE + 1, 0);
+	if (m_mode.printScoreMin == 0 && m_mode.scoreMin == 0) {
+		std::fill(d.m_lastFound.begin(), d.m_lastFound.end(), 0);
+	}
+
 	enqueueKernelDevice(d, d.m_kernelScore, m_size);
 	clFlush(d.m_clQueue);
 
@@ -451,23 +488,51 @@ void Dispatcher::handleResult(Device & d) {
 			return false;
 		}
 
+		bool hasNew = false;
+		for (int i = PROFANITY_MAX_SCORE; i >= 0; --i) {
+			const result & r = d.m_memResult[i];
+			if (i >= minScore) {
+				if (r.found > 0) {
+					hasNew = true;
+					break;
+				}
+			} else if (r.found > 0 && d.m_belowPrinted[i] == 0) {
+				hasNew = true;
+				break;
+			}
+		}
+		if (!hasNew) {
+			return true;
+		}
+
 		for (int i = PROFANITY_MAX_SCORE; i >= 0; --i) {
 			result & r = d.m_memResult[i];
 			if (i >= minScore) {
-				if (r.found > d.m_lastFound[i]) {
-					std::lock_guard<std::mutex> lock(m_mutex);
-					printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
-					d.m_lastFound[i] = r.found;
-					if (m_clScoreQuit && i >= m_clScoreQuit) {
-						m_quit = true;
-					}
+				if (r.found == 0) {
+					continue;
 				}
-			} else if (r.found > 0 && d.m_lastFound[i] == 0) {
-				std::lock_guard<std::mutex> lock(m_mutex);
-				printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
-				d.m_lastFound[i] = 1;
+				d.m_lastFound[i] = r.found;
 				if (m_clScoreQuit && i >= m_clScoreQuit) {
 					m_quit = true;
+				}
+				if (!shouldPrintNow()) {
+					continue;
+				}
+				{
+					std::lock_guard<std::mutex> lock(m_outputMutex);
+					printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
+				}
+			} else if (r.found > 0 && d.m_belowPrinted[i] == 0) {
+				d.m_belowPrinted[i] = 1;
+				if (m_clScoreQuit && i >= m_clScoreQuit) {
+					m_quit = true;
+				}
+				if (!shouldPrintNow()) {
+					continue;
+				}
+				{
+					std::lock_guard<std::mutex> lock(m_outputMutex);
+					printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
 				}
 			}
 		}
@@ -490,18 +555,112 @@ void Dispatcher::handleResult(Device & d) {
 			d.m_clScoreMax = i;
 			CLMemory<cl_uchar>::setKernelArg(d.m_kernelScore, 4, d.m_clScoreMax);
 
-			std::lock_guard<std::mutex> lock(m_mutex);
 			if (i >= m_clScoreMax) {
 				m_clScoreMax = i;
 
 				if (m_clScoreQuit && i >= m_clScoreQuit) {
 					m_quit = true;
 				}
-
+				if (!shouldPrintNow()) {
+					break;
+				}
+				std::lock_guard<std::mutex> lock(m_outputMutex);
 				printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
 			}
 
 			break;
+		}
+	}
+}
+
+bool Dispatcher::shouldPrintNow() {
+	if (m_mode.printIntervalMs <= 0) {
+		return true;
+	}
+
+	const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	auto last = m_lastPrintMs.load();
+	if (now - last < m_mode.printIntervalMs) {
+		return false;
+	}
+	return m_lastPrintMs.compare_exchange_weak(last, now);
+}
+
+void Dispatcher::enqueueResult(Device & d) {
+	ResultTask task;
+	task.device = &d;
+	task.seed = d.m_clSeed;
+	task.round = d.m_round;
+	task.results.resize(PROFANITY_MAX_SCORE + 1);
+	std::copy(d.m_memResult.data(), d.m_memResult.data() + (PROFANITY_MAX_SCORE + 1), task.results.begin());
+
+	{
+		std::lock_guard<std::mutex> lock(m_resultMutex);
+		m_resultQueue.push_back(std::move(task));
+	}
+	m_resultCv.notify_one();
+}
+
+void Dispatcher::resultThreadLoop() {
+	const cl_uchar minScore = (m_mode.printScoreMin > 0) ? m_mode.printScoreMin : m_mode.scoreMin;
+
+	while (true) {
+		ResultTask task;
+		{
+			std::unique_lock<std::mutex> lock(m_resultMutex);
+			m_resultCv.wait(lock, [&] { return m_resultStop || !m_resultQueue.empty(); });
+			if (m_resultStop && m_resultQueue.empty()) {
+				break;
+			}
+			task = std::move(m_resultQueue.front());
+			m_resultQueue.pop_front();
+		}
+
+		if (minScore == 0) {
+			continue;
+		}
+
+		bool hasNew = false;
+		for (int i = PROFANITY_MAX_SCORE; i >= 0; --i) {
+			const result & r = task.results[i];
+			if (i >= minScore) {
+				if (r.found > 0) {
+					hasNew = true;
+					break;
+				}
+			} else if (r.found > 0 && task.device->m_belowPrinted[i] == 0) {
+				hasNew = true;
+				break;
+			}
+		}
+		if (!hasNew) {
+			continue;
+		}
+
+		for (int i = PROFANITY_MAX_SCORE; i >= 0; --i) {
+			const result & r = task.results[i];
+			if (i >= minScore) {
+				if (r.found == 0) {
+					continue;
+				}
+				{
+					std::lock_guard<std::mutex> lock(m_outputMutex);
+					printResult(task.seed, task.round, r, i, timeStart, m_mode);
+				}
+				if (m_clScoreQuit && i >= m_clScoreQuit) {
+					m_quit = true;
+				}
+			} else if (r.found > 0 && task.device->m_belowPrinted[i] == 0) {
+				{
+					std::lock_guard<std::mutex> lock(m_outputMutex);
+					printResult(task.seed, task.round, r, i, timeStart, m_mode);
+				}
+				if (m_clScoreQuit && i >= m_clScoreQuit) {
+					m_quit = true;
+				}
+				task.device->m_belowPrinted[i] = 1;
+			}
 		}
 	}
 }
@@ -514,15 +673,25 @@ void Dispatcher::onEvent(cl_event event, cl_int status, Device & d) {
 		initContinue(d);
 	} else {
 		++d.m_round;
-		handleResult(d);
+		if (m_mode.printScoreMin > 0 || m_mode.scoreMin > 0) {
+			enqueueResult(d);
+		} else {
+			handleResult(d);
+		}
 
 		bool bDispatch = true;
 		{
 			std::lock_guard<std::mutex> lock(m_mutex);
+			const bool interrupt = Dispatcher::interruptRequested();
+			if (interrupt) {
+				m_quit = true;
+			}
 			d.m_speed.sample(m_size);
-			printSpeed();
+			if (!interrupt) {
+				printSpeed();
+			}
 
-			if( m_quit ) {
+			if( m_quit.load() ) {
 				bDispatch = false;
 				if(--m_countRunning == 0) {
 					clSetUserEventStatus(m_eventFinished, CL_COMPLETE);
@@ -538,22 +707,28 @@ void Dispatcher::onEvent(cl_event event, cl_int status, Device & d) {
 
 // This is run when m_mutex is held.
 void Dispatcher::printSpeed() {
-	++m_countPrint;
-	if( m_countPrint > m_vDevices.size() ) {
-		std::string strGPUs;
-		double speedTotal = 0;
-		unsigned int i = 0;
-		for (auto & e : m_vDevices) {
-			const auto curSpeed = e->m_speed.getSpeed();
-			speedTotal += curSpeed;
-			strGPUs += " GPU" + toString(e->m_index) + ": " + formatSpeed(curSpeed);
-			++i;
+	if (m_mode.printIntervalMs > 0) {
+		const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		auto last = m_lastSpeedPrintMs.load();
+		if (now - last < m_mode.printIntervalMs) {
+			return;
 		}
-
-		const std::string strVT100ClearLine = "\33[2K\r";
-		std::cerr << strVT100ClearLine << "Total: " << formatSpeed(speedTotal) << " -" << strGPUs << '\r' << std::flush;
-		m_countPrint = 0;
+		m_lastSpeedPrintMs.store(now);
 	}
+	std::string strGPUs;
+	double speedTotal = 0;
+	unsigned int i = 0;
+	for (auto & e : m_vDevices) {
+		const auto curSpeed = e->m_speed.getSpeed();
+		speedTotal += curSpeed;
+		strGPUs += " GPU" + toString(e->m_index) + ": " + formatSpeed(curSpeed);
+		++i;
+	}
+
+	const std::string strVT100ClearLine = "\33[2K\r";
+	std::lock_guard<std::mutex> lock(m_outputMutex);
+	std::cerr << strVT100ClearLine << "Total: " << formatSpeed(speedTotal) << " -" << strGPUs << '\r' << std::flush;
 }
 
 void CL_CALLBACK Dispatcher::staticCallback(cl_event event, cl_int event_command_exec_status, void * user_data) {

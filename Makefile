@@ -1,5 +1,5 @@
 CC=g++
-CDEFINES=
+CDEFINES=-DCL_TARGET_OPENCL_VERSION=300
 SOURCES=Dispatcher.cpp Mode.cpp precomp.cpp profanity.cpp SpeedSample.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=profanity2

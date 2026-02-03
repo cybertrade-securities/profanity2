@@ -421,6 +421,19 @@ typedef struct {
 	uchar foundHash[20];
 } result;
 
+__kernel void profanity_clear_results(__global result * const pResult) {
+	const size_t id = get_global_id(0);
+	if (id > PROFANITY_MAX_SCORE) {
+		return;
+	}
+
+	pResult[id].found = 0;
+	pResult[id].foundId = 0;
+	for (int i = 0; i < 20; ++i) {
+		pResult[id].foundHash[i] = 0;
+	}
+}
+
 void profanity_init_seed(__global const point * const precomp, point * const p, bool * const pIsFirst, const size_t precompOffset, const ulong seed) {
 	point o;
 
@@ -678,12 +691,15 @@ __kernel void profanity_iterate(__global mp_number * const pDeltaX, __global mp_
 
 void profanity_result_update(const size_t id, __global const uchar * const hash, __global result * const pResult, const uchar score, const uchar scoreMax) {
 	if (score && score > scoreMax) {
-		atomic_inc(&pResult[score].found); // NOTE: If "too many" results are found it'll wrap around to 0 again and overwrite last result. Only relevant if global worksize exceeds MAX(uint).
-
-		pResult[score].foundId = id;
-
-		for (int i = 0; i < 20; ++i) {
-			pResult[score].foundHash[i] = hash[i];
+		// Only record the first hit per score to avoid heavy atomic contention.
+		if (pResult[score].found != 0) {
+			return;
+		}
+		if (atomic_cmpxchg((volatile __global int *)&pResult[score].found, 0, 1) == 0) {
+			pResult[score].foundId = id;
+			for (int i = 0; i < 20; ++i) {
+				pResult[score].foundHash[i] = hash[i];
+			}
 		}
 	}
 }

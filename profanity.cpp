@@ -9,6 +9,13 @@
 #include <map>
 #include <set>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <signal.h>
+#include <unistd.h>
+#endif
+
 #if defined(__APPLE__) || defined(__MACOSX)
 #include <OpenCL/cl.h>
 #include <OpenCL/cl_ext.h> // Included to get topology to get an actual unique identifier per device
@@ -140,6 +147,35 @@ std::string getDeviceCacheFilename(cl_device_id & d, const size_t & inverseSize)
 	return "cache-opencl." + toString(inverseSize) + "." + toString(uniqueId);
 }
 
+namespace {
+#if defined(_WIN32)
+BOOL WINAPI consoleCtrlHandler(DWORD type) {
+	switch (type) {
+		case CTRL_C_EVENT:
+		case CTRL_BREAK_EVENT:
+		case CTRL_CLOSE_EVENT: {
+			Dispatcher::requestInterrupt();
+			const char nl = '\n';
+			DWORD written = 0;
+			HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+			if (h != INVALID_HANDLE_VALUE) {
+				WriteFile(h, &nl, 1, &written, NULL);
+			}
+			return TRUE;
+		}
+		default:
+			return FALSE;
+	}
+}
+#else
+void handleSignal(int) {
+	Dispatcher::requestInterrupt();
+	const char nl = '\n';
+	write(STDERR_FILENO, &nl, 1);
+}
+#endif
+}
+
 int main(int argc, char * * argv) {
 	// THIS LINE WILL LEAD TO A COMPILE ERROR. THIS TOOL SHOULD NOT BE USED, SEE README.
 
@@ -161,6 +197,8 @@ int main(int argc, char * * argv) {
 		int minScorePrint = -1;
 		bool bSaveResults = false;
 		std::string savePath = "results.txt";
+		bool bPrintInterval = false;
+		int printIntervalMs = 1000;
 		bool bModeLeadingRange = false;
 		bool bModeRange = false;
 		bool bModeMirror = false;
@@ -174,6 +212,13 @@ int main(int argc, char * * argv) {
 		size_t inverseSize = 255;
 		size_t inverseMultiple = 16384;
 		bool bMineContract = false;
+
+#if defined(_WIN32)
+		SetConsoleCtrlHandler(consoleCtrlHandler, TRUE);
+#else
+		signal(SIGINT, handleSignal);
+		signal(SIGTERM, handleSignal);
+#endif
 
 		argp.addSwitch('h', "help", bHelp);
 		argp.addSwitch('0', "benchmark", bModeBenchmark);
@@ -199,6 +244,7 @@ int main(int argc, char * * argv) {
 		argp.addOptionalSwitch('b', "zero-bytes", bModeZeroBytes, zeroBytesMin);
 		argp.addSwitch('S', "min-score", minScorePrint);
 		argp.addOptionalSwitch('p', "save", bSaveResults, savePath);
+		argp.addOptionalSwitch('P', "print-interval", bPrintInterval, printIntervalMs);
 
 		if (!argp.parse()) {
 			std::cout << "error: bad arguments, try again :<" << std::endl;
@@ -255,6 +301,14 @@ int main(int argc, char * * argv) {
 		if (bSaveResults) {
 			mode.saveResults = true;
 			mode.savePath = savePath;
+		}
+
+		if (bPrintInterval) {
+			if (printIntervalMs < 0) {
+				std::cout << "error: print-interval must be >= 0" << std::endl;
+				return 1;
+			}
+			mode.printIntervalMs = printIntervalMs;
 		}
 		
 		if (strPublicKey.length() == 0) {

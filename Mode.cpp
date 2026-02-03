@@ -1,7 +1,7 @@
 #include "Mode.hpp"
 #include <stdexcept>
 
-Mode::Mode() : score(0), scoreMin(0), printScoreMin(0), saveResults(false), savePath("") {
+Mode::Mode() : score(0), scoreMin(0), printScoreMin(0), saveResults(false), savePath(""), printIntervalMs(1000) {
 
 }
 

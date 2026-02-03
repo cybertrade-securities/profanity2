@@ -109,6 +109,7 @@ usage: ./profanity2 [OPTIONS]
     -n, --no-cache          Don't load cached pre-compiled version of kernel.
     -S, --min-score <score> Print scores below once; equal/above continuously.
     -p, --save [path]        Save results to file (default: results.txt).
+    -P, --print-interval [ms] Throttle prints (default: 1000ms).
 
   Tweaking:
     -w, --work <size>       Set OpenCL local work size. [default = 64]
@@ -130,6 +131,7 @@ usage: ./profanity2 [OPTIONS]
     ./profanity2 --zero-bytes 7 -z HEX_PUBLIC_KEY_128_CHARS_LONG
     ./profanity2 --min-score 7 --leading f -z HEX_PUBLIC_KEY_128_CHARS_LONG
     ./profanity2 --save results.txt --leading f -z HEX_PUBLIC_KEY_128_CHARS_LONG
+    ./profanity2 --print-interval 1000 --leading f -z HEX_PUBLIC_KEY_128_CHARS_LONG
 
   About:
     profanity2 is a vanity address generator for Ethereum that utilizes
